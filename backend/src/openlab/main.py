@@ -2,7 +2,8 @@ import base64
 import html
 import logging
 import re
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from http import HTTPStatus
@@ -193,7 +194,18 @@ settings = get_settings()
 bootstrap_token = settings.setup_token or token_urlsafe(24)
 logger = logging.getLogger("openlab")
 
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    if not settings.setup_token:
+        logger.warning("OpenLab one-time owner setup token: %s", bootstrap_token)
+    # Starlette never runs a mounted app's lifespan, so the MCP session manager must be started here.
+    async with product_mcp.session_manager.run():
+        yield
+
+
 app = FastAPI(
+    lifespan=lifespan,
     title="OpenLab API",
     version="0.1.0",
     openapi_url="/api/v1/openapi.json",
@@ -576,12 +588,6 @@ def settings_overview_out(db: Session, lab: Lab) -> dict[str, object]:
         "kicad": kicad_settings_out(db, lab),
         "environment": deployment_environment(),
     }
-
-
-@app.on_event("startup")
-def startup() -> None:
-    if not settings.setup_token:
-        logger.warning("OpenLab one-time owner setup token: %s", bootstrap_token)
 
 
 @app.get("/api/v1/health")
