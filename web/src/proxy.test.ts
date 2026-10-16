@@ -119,6 +119,14 @@ describe("server-side page access", () => {
   it.each(["/apiary", "/_next/static-private", "/favicon.ico/private", "/manifest.webmanifest/private"])("does not treat lookalike path %s as a public asset", (path) => {
     expect(unstable_doesProxyMatch({ config, url: `${origin}${path}` })).toBe(true);
   });
+
+  it.each(["/mcp", "/mcp/", "/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp", "/.well-known/oauth-authorization-server", "/oauth/register", "/oauth/token", "/oauth/revoke"])("leaves bearer-authenticated MCP OAuth endpoint %s to the backend", (path) => {
+    expect(unstable_doesProxyMatch({ config, url: `${origin}${path}` })).toBe(false);
+  });
+
+  it.each(["/oauth/authorize?client_id=c", "/oauth/authorize/approve", "/mcpanel", "/oauth/token/private", "/.well-known/private"])("keeps browser OAuth page or lookalike %s behind login", (path) => {
+    expect(unstable_doesProxyMatch({ config, url: `${origin}${path}` })).toBe(true);
+  });
 });
 
 describe("login return destinations", () => {

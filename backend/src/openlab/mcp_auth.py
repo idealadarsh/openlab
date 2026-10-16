@@ -5,8 +5,10 @@ from __future__ import annotations
 import hashlib
 from datetime import UTC, datetime, timedelta
 from secrets import token_urlsafe
+from urllib.parse import urlsplit
 
 from fastapi import HTTPException
+from mcp.server.transport_security import TransportSecuritySettings
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -27,6 +29,24 @@ def canonical_mcp_url(public_url: str | None) -> str | None:
         return None
     value = public_url.rstrip("/")
     return f"{value}/mcp" if value.startswith("https://") else None
+
+
+def oauth_origin(public_url: str | None, request_origin: str) -> str:
+    """Public origin for OAuth metadata; the request origin is the internal hop behind the web proxy."""
+    return (public_url or request_origin).rstrip("/")
+
+
+def mcp_transport_security(public_url: str | None) -> TransportSecuritySettings:
+    # Requests arrive through the Next.js rewrite (internal service host) or a
+    # local tunnel; the public hostname is allowed for direct proxy setups.
+    hosts = ["127.0.0.1:*", "localhost:*", "[::1]:*", "openlab-server", "openlab-server:*"]
+    origins = ["http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*"]
+    if public_url:
+        parsed = urlsplit(public_url)
+        if parsed.hostname:
+            hosts += [parsed.netloc, f"{parsed.hostname}:*"]
+            origins.append(f"{parsed.scheme}://{parsed.netloc}")
+    return TransportSecuritySettings(enable_dns_rebinding_protection=True, allowed_hosts=hosts, allowed_origins=origins)
 
 
 def ensure_enabled(db: Session, user: User) -> Lab:

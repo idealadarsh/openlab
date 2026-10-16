@@ -1,4 +1,5 @@
 import base64
+import html
 import logging
 import re
 from collections.abc import Callable
@@ -61,6 +62,8 @@ from .mcp_auth import (
     MCP_SCOPES,
     canonical_mcp_url,
     hash_credential,
+    mcp_transport_security,
+    oauth_origin,
     register_public_client,
     rotate_refresh,
 )
@@ -204,7 +207,7 @@ app.mount(
         json_response=True,
         stateless_http=True,
         max_request_body_size=64 * 1024,
-        host="localhost",
+        transport_security=mcp_transport_security(settings.public_url),
     ),
 )
 
@@ -308,8 +311,10 @@ def revoke_mcp_grant(
 
 
 @app.get("/.well-known/oauth-protected-resource", include_in_schema=False)
+@app.get("/.well-known/oauth-protected-resource/mcp", include_in_schema=False)
 def mcp_protected_resource_metadata(request: Request) -> dict[str, object]:
-    origin = str(request.base_url).rstrip("/")
+    # RFC 9728 path-specific URL is what the MCP SDK advertises in WWW-Authenticate.
+    origin = oauth_origin(settings.public_url, str(request.base_url))
     return {
         "resource": f"{origin}/mcp",
         "authorization_servers": [origin],
@@ -319,7 +324,7 @@ def mcp_protected_resource_metadata(request: Request) -> dict[str, object]:
 
 @app.get("/.well-known/oauth-authorization-server", include_in_schema=False)
 def mcp_authorization_metadata(request: Request) -> dict[str, object]:
-    origin = str(request.base_url).rstrip("/")
+    origin = oauth_origin(settings.public_url, str(request.base_url))
     return {
         "issuer": origin,
         "authorization_endpoint": f"{origin}/oauth/authorize",
@@ -369,9 +374,18 @@ def authorize_mcp_oauth(
     csrf = request.cookies.get("openlab_csrf")
     if not csrf:
         raise HTTPException(status_code=403, detail="CSRF cookie is required for MCP approval")
-    fields = {"client_id": client_id, "redirect_uri": redirect_uri, "code_challenge": code_challenge, "scope": " ".join(requested), "state": state or "", "csrf": csrf}
-    hidden = "".join(f'<input type="hidden" name="{key}" value="{value}">' for key, value in fields.items())
-    return HTMLResponse(f"""<!doctype html><title>Authorize OpenLab MCP</title><main><h1>Authorize {client.name}</h1><p>This client requests: {', '.join(requested)}.</p><form method=post action=/oauth/authorize/approve>{hidden}<button type=submit>Approve OpenLab access</button></form></main>""", headers={"Cache-Control": "no-store"})
+    fields = {"client_id": client_id, "redirect_uri": redirect_uri, "code_challenge": code_challenge, "requested_scope": " ".join(requested), "state": state or "", "csrf": csrf}
+    hidden = "".join(f'<input type="hidden" name="{html.escape(key)}" value="{html.escape(value)}">' for key, value in fields.items())
+    # Only read access is preselected; broader scopes must be opted into here.
+    choices = "".join(
+        f'<label><input type="checkbox" name="scope" value="{html.escape(value)}"'
+        + (" checked disabled" if value == "openlab:read" else "")
+        + f"> {html.escape(value)}</label><br>"
+        for value in requested
+    )
+    if "openlab:read" in requested:
+        choices += '<input type="hidden" name="scope" value="openlab:read">'
+    return HTMLResponse(f"""<!doctype html><title>Authorize OpenLab MCP</title><main><h1>Authorize {html.escape(client.name)}</h1><p>Choose the access to grant:</p><form method=post action=/oauth/authorize/approve>{hidden}{choices}<button type=submit>Approve OpenLab access</button></form></main>""", headers={"Cache-Control": "no-store"})
 
 
 @app.post("/oauth/authorize/approve", include_in_schema=False)
@@ -379,7 +393,8 @@ def approve_mcp_oauth(
     client_id: str = Form(),
     redirect_uri: str = Form(),
     code_challenge: str = Form(),
-    scope: str = Form(),
+    requested_scope: str = Form(),
+    scope: list[str] = Form(),
     state: str = Form(default=""),
     csrf: str = Form(),
     csrf_cookie: str | None = Cookie(default=None, alias="openlab_csrf"),
@@ -390,8 +405,9 @@ def approve_mcp_oauth(
         raise HTTPException(status_code=403, detail="CSRF validation failed")
     lab = ensure_mcp_enabled(db, user)
     client = db.get(McpOAuthClient, client_id)
-    scopes = sorted(set(scope.split()))
-    if not client or redirect_uri not in client.redirect_uris or not scopes or not set(scopes).issubset(MCP_SCOPES):
+    scopes = sorted(set(scope))
+    requested = set(requested_scope.split())
+    if not client or redirect_uri not in client.redirect_uris or "openlab:read" not in scopes or not set(scopes).issubset(requested & MCP_SCOPES):
         raise HTTPException(status_code=422, detail="Invalid MCP OAuth approval")
     grant = McpGrant(lab_id=lab.id, user_id=user.id, client_id=client.id, scopes=scopes)
     db.add(grant)
