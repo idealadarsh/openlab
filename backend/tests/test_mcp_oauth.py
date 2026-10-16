@@ -6,7 +6,6 @@ import pytest
 from fastapi.testclient import TestClient
 from mcp.server.auth.provider import AccessToken
 from mcp.server.transport_security import TransportSecurityMiddleware
-from starlette.routing import Mount
 
 from openlab.main import app, get_db
 from openlab.mcp_auth import mcp_transport_security
@@ -97,13 +96,13 @@ def test_approval_rejects_missing_read_or_unrequested_scope(consent: tuple[TestC
 
 
 def test_authenticated_mcp_accepts_internal_rewrite_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Goes through the main app: Starlette never runs a mounted app's lifespan, so this also covers session manager startup.
     async def verified(_: object, token: str) -> AccessToken:
         return AccessToken(token=token, client_id="client", scopes=["openlab:read"], subject="owner", claims={})
 
     monkeypatch.setattr(OpenLabTokenVerifier, "verify_token", verified)
-    mcp_app = next(route.app for route in app.routes if isinstance(route, Mount) and route.path == "/mcp")
-    with TestClient(mcp_app, base_url="http://openlab-server:8000") as client:
-        response = client.post("/", headers={"Authorization": "Bearer t", "Accept": "application/json, text/event-stream"}, json={
+    with TestClient(app, base_url="http://openlab-server:8000") as client:
+        response = client.post("/mcp/", headers={"Authorization": "Bearer t", "Accept": "application/json, text/event-stream"}, json={
             "jsonrpc": "2.0", "id": 1, "method": "initialize",
             "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "test", "version": "0"}},
         })
