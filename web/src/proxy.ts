@@ -62,5 +62,7 @@ export async function proxy(request: NextRequest) {
 export const config = {
   // Keep API authentication/CSRF in FastAPI and allow only framework assets
   // and public metadata through. New application pages are private by default.
-  matcher: ["/((?!api(?:/|$)|_next/static(?:/|$)|_next/image(?:/|$)|favicon\\.ico$|manifest\\.webmanifest$).*)"],
+  // MCP and its OAuth discovery/token endpoints authenticate with bearer or
+  // PKCE credentials in FastAPI; /oauth/authorize stays behind the login page.
+  matcher: ["/((?!api(?:/|$)|mcp(?:/|$)|\\.well-known/oauth-|oauth/(?:register|token|revoke)$|_next/static(?:/|$)|_next/image(?:/|$)|favicon\\.ico$|manifest\\.webmanifest$).*)"],
 };
